@@ -1721,7 +1721,7 @@ class UniqueKeyValuesLists
     }
 }
 
-/* Finds the median. Modifies the range via topN or sort in the process.
+/* Finds the percentile. Modifies the range via topN or sort in the process.
  * 
  * Note: topN is the preferred algorithm, but the version prior to Phobos 2.073
  * is pathologically slow on certain data sets. Use topN in 2.073 and later,
@@ -1733,79 +1733,89 @@ class UniqueKeyValuesLists
  */
 static if (__VERSION__ >= 2073)
 {
-    version = rangeMedianViaTopN;
+    version = rangePercentileViaTopN;
 }
 else
 {
-    version = rangeMedianViaSort;
+    version = rangePercentileViaSort;
 }
 
-auto rangeMedian (Range) (Range r)
+auto rangePercentile (Range) (Range r, int targetPercentile)
     if (isRandomAccessRange!Range && hasLength!Range && hasSlicing!Range)
 {
-    version(rangeMedianViaSort)
+    version(rangePercentileViaSort)
     {
-        version(rangeMedianViaTopN)
+        version(rangePercentileViaTopN)
         {
-            assert(0, "Both rangeMedianViaSort and rangeMedianViaTopN assigned as versions. Assign only one.");
+            assert(0, "Both rangePercentileViaSort and rangePercentileViaTopN assigned as versions. Assign only one.");
         }
     }
-    else version(rangeMedianViaTopN)
+    else version(rangePercentileViaTopN)
     {
     }
     else
     {
-        static assert(0, "A version of rangeMedianViaSort or rangeMedianViaTopN must be assigned.");
+        static assert(0, "A version of rangePercentileViaSort or rangePercentileViaTopN must be assigned.");
     }
 
     import std.traits : isFloatingPoint;
     
-    ElementType!Range median;
+    ElementType!Range percentile;
 
     if (r.length > 0)
     {
-        size_t medianIndex = r.length / 2;
+        import std.conv : to;
+        float factor = targetPercentile / 100.0;
+        size_t percentileIndex = to!size_t(r.length * factor);
         
-        version(rangeMedianViaSort)
+        version(rangePercentileViaSort)
         {
             import std.algorithm : sort;
             sort(r);
-            median = r[medianIndex];
+            percentile = r[percentileIndex];
             
             static if (isFloatingPoint!(ElementType!Range))
             {
                 if (r.length % 2 == 0)
                 {
                     /* Even number of values. Split the difference. */
-                    median = (median + r[medianIndex - 1]) / 2.0;
+                    percentile = (percentile + r[percentileIndex - 1]) / 2.0;
                 }
             }
         }
-        else version(rangeMedianViaTopN)
+        else version(rangePercentileViaTopN)
         {
             import std.algorithm : maxElement, topN;
-            topN(r, medianIndex);
-            median = r[medianIndex];
+            topN(r, percentileIndex);
+            percentile = r[percentileIndex];
             
             static if (isFloatingPoint!(ElementType!Range))
             {
                 if (r.length % 2 == 0)
                 {
                     /* Even number of values. Split the difference. */
-                    if (r[medianIndex - 1] < median)
+                    if (r[percentileIndex - 1] < percentile)
                     {
-                        median = (median + r[0..medianIndex].maxElement) / 2.0;
+                        percentile = (percentile + r[0..percentileIndex].maxElement) / 2.0;
                     }
                 }
             }
         }
         else
         {
-            static assert(0, "A version of rangeMedianViaSort or rangeMedianViaTopN must be assigned.");
+            static assert(0, "A version of rangePercentileViaSort or rangePercentileViaTopN must be assigned.");
         }
     }
     
-    return median;
+    return percentile;
+}
+
+//TODO: Other percentile tests?
+
+/* Finds the median.  This is a shorthand for the 50th percentile. */
+auto rangeMedian (Range) (Range r)
+{
+	return rangePercentile(r, 50);
 }
 
 /* rangeMedian unit tests. */
