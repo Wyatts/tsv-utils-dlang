@@ -175,6 +175,7 @@ struct TsvSummarizeOptions {
                 "range",              "n[,n...][:STR]  Difference between min and max values. (Numeric fields only.)", &operatorOptionHandler!RangeOperator,
                 "sum",                "n[,n...][:STR]  Sum of the values. (Numeric fields only.)", &operatorOptionHandler!SumOperator,
                 "mean",               "n[,n...][:STR]  Mean (average). (Numeric fields only.)", &operatorOptionHandler!MeanOperator,
+                "perc90",             "n[,n...][:STR]  90th percentile value. (Numeric fields only. Reads all values into memory.)", &operatorOptionHandler!Perc90Operator,
                 "median",             "n[,n...][:STR]  Median value. (Numeric fields only. Reads all values into memory.)", &operatorOptionHandler!MedianOperator,
                 "mad",                "n[,n...][:STR]  Median absolute deviation from the median. Raw value, not scaled. (Numeric fields only. Reads all values into memory.)", &operatorOptionHandler!MadOperator,
                 "var",                "n[,n...][:STR]  Variance. (Sample variance, numeric fields only).", &operatorOptionHandler!VarianceOperator,
@@ -1600,7 +1601,7 @@ class UniqueKeyValuesLists
      */
     private FieldValues!double[] _numericFieldValues;
     private FieldValues!string[] _textFieldValues;
-    private double[] _numericFieldMedians;
+    private double[] _numericFieldMedians; //XXX: unused
 
     /* The UniqueKeyValuesLists constructor takes arrays of field indices to be saved. */
     this(const size_t[] numericFieldIndices, const size_t[] textFieldIndices)
@@ -1652,6 +1653,11 @@ class UniqueKeyValuesLists
         return findTextFieldValues(index).getArray;
     }
 
+    final double numericValuesPerc90(size_t index)
+    {
+        return findNumericFieldValues(index).perc90;
+    }
+
     final double numericValuesMedian(size_t index)
     {
         return findNumericFieldValues(index).median;
@@ -1664,6 +1670,8 @@ class UniqueKeyValuesLists
         private Appender!(ValueType[]) _values;
         private bool _haveMedian = false;
         private ValueType _medianValue;
+        private bool _havePerc90 = false;
+        private ValueType _perc90Value;
         
         this(size_t fieldIndex)
         {
@@ -1689,11 +1697,13 @@ class UniqueKeyValuesLists
             {
                 _values.put(field.to!ValueType);
                 _haveMedian = false;
+                _havePerc90 = false;
             }
             else if (missingPolicy.replaceMissing)
             {
                 _values.put(missingPolicy.missingReplacement.to!ValueType);
                 _haveMedian = false;
+                _havePerc90 = false;
             }
         }
         
@@ -1706,6 +1716,17 @@ class UniqueKeyValuesLists
         final ValueType[] getArray()
         {
             return _values.data;
+        }
+
+        final ValueType perc90()
+        {
+            if (!_havePerc90)
+            {
+                _perc90Value = _values.data.rangePercentile(90);
+                _havePerc90 = true;
+            }
+            
+            return _perc90Value;
         }
 
         final ValueType median()
@@ -2988,6 +3009,47 @@ unittest // MeanOperator
                                           new MissingFieldPolicy(true, ""));  // Exclude missing
     testSingleFieldOperator!MeanOperator(col1misFile, 0, "mean", ["nan", "0", "3", "2", "5", "12"],
                                           new MissingFieldPolicy(false, "0"));  // Replace missing
+}
+
+/* Perc90Operator produces the 90th percentile of all the values. This is a numeric operator.
+ *
+ * All the field values are stored in memory as part of this calculation. This is
+ * handled by unique key value lists.
+ */
+class Perc90Operator : SingleFieldOperator
+{
+    this(size_t fieldIndex, MissingFieldPolicy missingPolicy)
+    {
+        super("90pct", fieldIndex, missingPolicy);
+        setSaveFieldValuesNumeric();
+    }
+    
+    final override SingleFieldCalculator makeCalculator()
+    {
+        return new Perc90Calculator(fieldIndex);
+    }
+
+    class Perc90Calculator : SingleFieldCalculator
+    {
+        this(size_t fieldIndex)
+        {
+            super(fieldIndex);
+        }
+
+        final override Perc90Operator getOperator()
+        {
+            return this.outer;
+        }
+        
+        /* Work is done by saving the field values. */
+        final override void processNextField(const char[] nextField)
+        { }
+        
+        final string calculate(UniqueKeyValuesLists valuesLists, const ref SummarizerPrintOptions printOptions)
+        {
+            return printOptions.formatNumber(valuesLists.numericValuesPerc90(fieldIndex));
+        }
+    }
 }
 
 /* MedianOperator produces the median of all the values. This is a numeric operator.
